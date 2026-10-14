@@ -74,6 +74,27 @@ kbd {
 }
 b.y { color: var(--gold); }
 b.r { color: #ff6b6b; }
+b.c { color: #7df9ff; }
+.turn { font-size: 14px; margin: 12px 0 0; }
+
+/* ---------- AI skills bar / chase timer ---------- */
+#skillbar {
+  position: fixed; top: 72px; left: 50%; transform: translateX(-50%);
+  width: min(420px, calc(100% - 32px)); pointer-events: none; text-align: center;
+}
+#skillbar .track {
+  height: 14px; border-radius: 999px; overflow: hidden;
+  background: rgba(10, 8, 24, 0.6); border: 1px solid var(--line);
+}
+#skillbar .fill {
+  height: 100%; width: 0; border-radius: 999px;
+  background: linear-gradient(90deg, #7c4dff, #00c6ff); box-shadow: 0 0 12px #00c6ff;
+  transition: width .15s linear;
+}
+#skillbar .lbl { margin-top: 3px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-shadow: 0 1px 3px #000; }
+#skillbar.chase .fill { background: linear-gradient(90deg, #ff7a00, #ffcf3f); box-shadow: 0 0 16px #ffb300; transition: none; }
+#skillbar.chase .lbl { color: var(--gold); animation: pulse .5s ease-in-out infinite alternate; }
+@keyframes pulse { to { transform: scale(1.08); } }
 .collect { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; align-items: center; font-size: 13px; }
 .chip { background: rgba(255, 255, 255, .08); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
 .warn { color: #ff8a8a; font-size: 13px; margin: 12px 0 14px; }

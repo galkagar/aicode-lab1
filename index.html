@@ -21,6 +21,11 @@
     </div>
   </div>
 
+  <div id="skillbar" class="hidden">
+    <div class="track"><div class="fill" id="skillFill"></div></div>
+    <div class="lbl" id="skillLbl">🧠 AI skills 0/22</div>
+  </div>
+
   <div id="title" class="overlay">
     <div class="card">
       <p class="kicker">HUJI · Semester of Doom</p>
@@ -37,8 +42,9 @@
         <span class="chip">🏢 company logos = applications</span>
         <span class="chip">💯 A+ tests</span>
         <span class="chip">☕ magnet</span>
-        <span class="chip">✉️ rec-letter shield</span>
+        <span class="chip">🛡️ shield deflects one hit</span>
       </div>
+      <p class="turn">🧠 Fill the <b class="c">AI skills</b> bar and the tables turn: <b class="y">you chase the AI with a whip</b> for big points!</p>
       <p class="warn">Trip twice in a row and the AI catches you.</p>
       <button id="startBtn" class="big">Start running</button>
       <p class="best" id="bestTitle"></p>
@@ -57,6 +63,7 @@
         <div><span id="rDist">0</span><small>meters</small></div>
       </div>
       <div id="rCompanies" class="companies"></div>
+      <p class="best" id="rWhips"></p>
       <p class="best" id="rBest"></p>
       <button id="againBtn" class="big">Run again</button>
       <p class="hint">or press Space</p>

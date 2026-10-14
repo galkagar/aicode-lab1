@@ -12,9 +12,10 @@
   const JUNC = HW * 2;            // depth of a corner junction
   const CAM_H = 3.2, CAM_D = 6;   // camera height / distance behind the player
   const DRAW = 140, TILE = 2;
-  const Z_NEAR = -CAM_D + 0.7;
   const GRAVITY = 28, JUMP_V = 9.5;
-  const TURN_TIME = 0.45;
+  const TURN_TIME = 0.8, TURN_YAW = 0.85;   // seconds / radians the camera swings through on a turn
+  const SKILLS_NEEDED = 22, CHASE_TIME = 12, WHIP_COOLDOWN = 0.45;
+  let camH = CAM_H, camD = CAM_D, Z_NEAR = -CAM_D + 0.7, yaw = 0;
 
   const rand = (a, b) => a + Math.random() * (b - a);
   const randInt = (n) => Math.floor(Math.random() * n);
@@ -46,6 +47,16 @@
     "You've reached your career limit. Upgrade?",
   ];
   const BLOCK_LABELS = ['REJECTED', 'GRADE: F', 'NO REPLY'];
+  const SKILLS = ['Prompting', 'PyTorch', 'Transformers', 'RAG', 'Fine-tuning', 'Agents', 'CUDA', 'Embeddings'];
+  const AI_PANIC = [
+    'Wait! I can explain my hallucinations!',
+    'Error 429: Too Many Whips',
+    "OK OK, you can have the internship!",
+    "Please! I'm just a language model!",
+    'This violates my content policy!',
+    'Ctrl+Z! CTRL+Z!',
+    'I was trained for this... I was NOT.',
+  ];
 
   // ---------- Canvas sizing ----------
   let W = 0, H = 0, DPR = 1, F = 1, HORIZON = 0, SC = 1;
@@ -55,17 +66,20 @@
     canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
     canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
     F = Math.min(H * 0.95, W * 1.4);
-    HORIZON = H - (CAM_H * F) / CAM_D - H * 0.13;
     SC = Math.min(W, H) / 800;
   }
   window.addEventListener('resize', resize);
   resize();
 
   let camX = 0;
+  // World -> screen. The camera can yaw (turn animation) around the player.
   function proj(x, y, z) {
-    const s = F / (z + CAM_D);
-    return { x: W / 2 + (x - camX) * s, y: HORIZON + (CAM_H - y) * s, s };
+    let xr = x - camX, zr = z;
+    if (yaw) { const c = Math.cos(yaw), sn = Math.sin(yaw); xr = (x - camX) * c + z * sn; zr = -(x - camX) * sn + z * c; }
+    const d = Math.max(zr + camD, 0.05), s = F / d;
+    return { x: W / 2 + xr * s, y: HORIZON + (camH - y) * s, s, d };
   }
+  const smooth = (k) => k * k * (3 - 2 * k);
 
   // ---------- Best score (per-browser convenience only) ----------
   let best = 0;
@@ -98,6 +112,11 @@
     turn: () => tone(220, 0.3, 'triangle', 0.1, 880),
     power: () => { tone(660, 0.1, 'square', 0.06); tone(990, 0.1, 'square', 0.06, null, 0.1); tone(1320, 0.15, 'square', 0.06, null, 0.2); },
     hit: () => tone(140, 0.3, 'sawtooth', 0.18, 50),
+    skill: () => { tone(520, 0.07, 'triangle', 0.09); tone(780, 0.07, 'triangle', 0.09, null, 0.06); tone(1040, 0.1, 'triangle', 0.09, null, 0.12); },
+    deflect: () => { tone(1800, 0.12, 'square', 0.08, 900); tone(2600, 0.2, 'triangle', 0.06, 1200, 0.03); },
+    whip: () => { tone(3000, 0.05, 'square', 0.14, 400); tone(160, 0.15, 'sawtooth', 0.1, 60, 0.04); },
+    miss: () => tone(900, 0.12, 'sine', 0.06, 300),
+    fanfare: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.18, 'square', 0.07, null, i * 0.1)),
     over: () => { tone(440, 0.25, 'square', 0.08, 220); tone(220, 0.5, 'square', 0.08, 80, 0.25); },
   };
 
@@ -112,6 +131,7 @@
       threat: 1, stumble: 0, shield: false, magnet: 0, turnT: 0, turnDir: 0, turnQ: null,
       popups: [], cause: null, dyingT: 0, shake: 0, flash: 0,
       quote: '', quoteT: 1.2, quoteShow: 0, quoteChars: 0, ex: W / 2, overAt: 0,
+      skills: 0, chase: null, cam: 0, whips: 0, invuln: 0, shieldBreak: 0, banner: null, flashGold: 0,
     };
     P = { lane: 1, x: 0, y: 0, vy: 0, slide: 0 };
     fillScenery();
@@ -136,14 +156,17 @@
 
   // ---------- Spawning patterns ----------
   function item(lane, z, y, kind) {
-    S.ents.push({ cat: 'item', kind, x: LANES[lane], z, y, company: kind === 'logo' ? pick(COMPANIES) : null, grade: pick(['100', 'A+']) });
+    S.ents.push({ cat: 'item', kind, x: LANES[lane], z, y, company: kind === 'logo' ? pick(COMPANIES) : null, grade: pick(['100', 'A+']), skill: pick(SKILLS) });
   }
   function line(z, lane, n = 6, y = 1) {
-    for (let k = 0; k < n; k++) item(lane, z + k * 2.4, y, Math.random() < 0.28 ? 'logo' : 'test');
+    for (let k = 0; k < n; k++) {
+      const r = Math.random();
+      item(lane, z + k * 2.4, y, r < 0.25 ? 'logo' : r < 0.39 && !S.chase ? 'skill' : 'test');
+    }
   }
   function arc(z, lane, h, span = 9) {
     const n = 5;
-    for (let k = 0; k < n; k++) item(lane, z + (k / (n - 1)) * span, 1 + h * Math.sin(Math.PI * k / (n - 1)), k === 2 ? 'logo' : 'test');
+    for (let k = 0; k < n; k++) item(lane, z + (k / (n - 1)) * span, 1 + h * Math.sin(Math.PI * k / (n - 1)), k === 2 ? 'logo' : k === 1 && !S.chase ? 'skill' : 'test');
   }
   function obs(type, lane, z) {
     S.ents.push({ cat: 'obs', type, full: lane < 0, x: lane < 0 ? 0 : LANES[lane], z, label: pick(BLOCK_LABELS), fade: 1, hit: false });
@@ -151,7 +174,7 @@
 
   function pattern(z) {
     const r = Math.random(), d = diff();
-    if (S.dist + z < 110 || r < 0.2) { line(z, randInt(3)); return 13; }
+    if (S.chase || S.dist + z < 110 || r < 0.2) { line(z, randInt(3)); return 13; }
     if (r < 0.42) {
       const lane = randInt(3);
       obs(pick(['low', 'high', 'block', 'block']), lane, z);
@@ -172,14 +195,14 @@
       arc(z - 4, randInt(3), 1.5, len + 8);
       return len + 4;
     }
-    item(randInt(3), z, 1, Math.random() < 0.5 ? 'coffee' : 'letter');
+    item(randInt(3), z, 1, Math.random() < 0.5 ? 'coffee' : 'shield');
     line(z + 4, randInt(3), 4);
     return 14;
   }
 
   function spawnUpdate() {
     while (!S.corner && S.cursor < DRAW) {
-      if (S.segLen > S.nextCorner) { S.corner = { z: S.cursor + 4, dir: pick([-1, 1, 0]) }; break; }
+      if (!S.chase && S.segLen > S.nextCorner) { S.corner = { z: S.cursor + 4, dir: pick([-1, 1, 0]) }; break; }
       const len = pattern(S.cursor);
       const gap = rand(12, 22) * (1.1 - diff() * 0.35);
       S.cursor += len + gap; S.segLen += len + gap;
@@ -199,7 +222,7 @@
     S.nextCorner = rand(300, 480);
     fillScenery();
     S.turnT = TURN_TIME; S.turnDir = dir; S.turnQ = null;
-    skyBase -= dir * W * 0.35;
+    skyBase -= dir * TURN_YAW * F * 0.9;
     P.lane = 1; P.x = 0;
     sfx.turn();
   }
@@ -212,6 +235,7 @@
   }
   function jump() {
     if (S.mode !== 'play' || paused) return;
+    if (S.chase) { whip(); return; }
     if (P.y <= 0.001) { P.vy = JUMP_V; P.slide = 0; sfx.jump(); }
   }
   function slide() {
@@ -226,6 +250,44 @@
     S.popups.push({ text, x: clamp(x, 120, W - 120), y, t: 0, color });
   }
 
+  function banner(title, sub) { S.banner = { title, sub, t: 0 }; }
+
+  // ---------- Chase mode: the tables turn ----------
+  function startChase() {
+    S.chase = { t: CHASE_TIME, intro: 0, lane: 1, x: P.x, z: -3.5, y: 0.6, nextDodge: 1.5, whipT: 0, hit: false, flinch: 0, hits: 0, bonus: 0 };
+    S.ents = S.ents.filter((e) => e.cat === 'item');
+    S.corner = null; S.turnQ = null; S.segLen = 0; S.stumble = 0; S.slow = 0;
+    S.flashGold = 0.6;
+    banner('TABLES TURNED!', 'Match its lane and press ↑ / Space / tap to WHIP the AI');
+    say(pick(AI_PANIC)); S.quoteT = 3;
+    sfx.fanfare();
+  }
+  function endChase() {
+    const C = S.chase;
+    S.chase = null; S.skills = 0; S.segLen = 0;
+    S.threat = 1; S.flashGold = 0.4;
+    banner('THE AI REBOOTED', `Chase bonus +${C.bonus}. Collect AI skills to do it again!`);
+    say('Patch applied. Now, where were we?'); S.quoteT = 8;
+  }
+  function whip() {
+    const C = S.chase;
+    if (!C || C.intro < 1 || C.cool > 0) return;
+    C.whipT = 0.3; C.cool = WHIP_COOLDOWN;
+    C.hit = Math.abs(C.x - P.x) < 1.0;
+    const a = chaseAIScreen(), p = { x: a.x, y: a.y - a.R * 0.9 };
+    if (C.hit) {
+      C.hits++; S.whips++; S.score += 150; C.bonus += 150;
+      C.flinch = 0.45; S.shake = 0.2;
+      popup('+150 WHIPPED!', p.x, p.y - 60, '#ffcf3f');
+      sfx.whip();
+      if (Math.random() < 0.5) { say(pick(AI_PANIC)); S.quoteT = 4; }
+      C.nextDodge = Math.min(C.nextDodge, 0.3); // it flees to another lane after each hit
+    } else {
+      popup('missed!', p.x, p.y - 60, '#dddddd');
+      sfx.miss();
+    }
+  }
+
   function say(text) { S.quote = text; S.quoteShow = 4.5; S.quoteChars = 0; }
 
   function collect(e) {
@@ -238,18 +300,27 @@
       sfx.logo();
     } else if (e.kind === 'test') {
       S.tests++; S.score += 10;
-      popup(e.grade === 'A+' ? '+10 A+' : '+10 💯', p.x, p.y - 20);
+      if (!S.chase) popup(e.grade === 'A+' ? '+10 A+' : '+10 💯', p.x, p.y - 20);
       sfx.coin();
     } else if (e.kind === 'coffee') {
       S.magnet = 8; popup('☕ Coffee rush: magnet!', W / 2, H * 0.4, '#ffcf8a'); sfx.power();
-    } else if (e.kind === 'letter') {
-      S.shield = true; popup('✉️ Rec letter: shield!', W / 2, H * 0.4, '#9fd8ff'); sfx.power();
+    } else if (e.kind === 'shield') {
+      S.shield = true; popup('🛡️ Shield up! Next hit is deflected', W / 2, H * 0.4, '#8fe3ff'); sfx.power();
+    } else if (e.kind === 'skill') {
+      S.score += 20;
+      popup(`+1 AI skill: ${e.skill}`, p.x, p.y - 30, '#7df9ff');
+      sfx.skill();
+      if (!S.chase) { S.skills = Math.min(SKILLS_NEEDED, S.skills + 1); if (S.skills >= SKILLS_NEEDED) startChase(); }
     }
   }
 
-  function onHit() {
+  function onHit(e) {
+    if (S.shield) {
+      S.shield = false; e.deflect = true; S.invuln = 0.6; S.shieldBreak = 0.5; S.shake = 0.15;
+      popup('🛡️ DEFLECTED!', W / 2, H * 0.4, '#8fe3ff'); sfx.deflect();
+      return;
+    }
     S.flash = 0.4; S.shake = 0.45; sfx.hit();
-    if (S.shield) { S.shield = false; popup('Rec letter saved you!', W / 2, H * 0.4, '#9fd8ff'); return; }
     if (S.stumble > 0) { die('caught'); return; }
     S.stumble = 6; S.slow = 5;
     popup('Tripped! The AI is right behind you!', W / 2, H * 0.4, '#ff7676');
@@ -272,7 +343,7 @@
     if (S.mode === 'play') {
       S.playT += dt;
       S.slow = Math.max(0, S.slow - dt * 1.5);
-      speed = Math.min(30, 13 + S.playT * 0.22) - S.slow;
+      speed = (Math.min(30, 13 + S.playT * 0.22) - S.slow) * (S.chase ? 1.15 : 1);
     } else if (S.mode === 'title') speed = 7;
     else if (S.mode === 'dying') speed = S.cause === 'wall' ? 0 : Math.max(0, S.curSpeed - dt * 40);
     S.curSpeed = speed;
@@ -294,8 +365,10 @@
     camX = P.x * 0.55;
 
     if (S.mode === 'play') {
-      S.score += dz * 0.4;
+      S.score += dz * 0.4 * (S.chase ? 3 : 1);
       spawnUpdate();
+      S.invuln = Math.max(0, S.invuln - dt);
+      if (S.chase) updateChase(dt);
 
       const top = P.slide > 0 && P.y < 0.3 ? 0.95 : 1.95;
       for (const e of S.ents) {
@@ -312,23 +385,24 @@
             if (e.type === 'low') hit = P.y < 0.8;
             else if (e.type === 'high') hit = !(P.slide > 0 && P.y < 0.4);
             else hit = true;
-            if (hit) { e.hit = true; onHit(); }
+            if (hit) { e.hit = true; if (S.invuln > 0) e.deflect = true; else onHit(e); }
           }
         } else if (e.cat === 'gap') {
           if (e.z < -0.3 && e.z + e.len > 0.3 && P.y <= 0.001) die('fall');
         }
-        if (e.hit) e.fade -= dt * 3;
+        if (e.hit) { e.flyT = (e.flyT || 0) + dt; e.fade -= dt * (e.deflect ? 1.6 : 3); }
       }
 
       if (S.turnQ) { S.turnQ.t -= dt; if (!tryTurn(S.turnQ.dir) && S.turnQ && S.turnQ.t <= 0) S.turnQ = null; }
       if (S.corner && S.corner.z + JUNC < 0.6) die('wall');
 
-      if (S.stumble > 0) { S.stumble -= dt; S.threat = lerp(S.threat, 1, Math.min(1, dt * 4)); }
+      if (S.chase) S.threat = 0;
+      else if (S.stumble > 0) { S.stumble -= dt; S.threat = lerp(S.threat, 1, Math.min(1, dt * 4)); }
       else S.threat = lerp(S.threat, S.quoteShow > 0 ? 0.78 : 0.42, Math.min(1, dt * 1.2));
       S.magnet = Math.max(0, S.magnet - dt);
 
       S.quoteT -= dt;
-      if (S.quoteT <= 0) { say(pick(AI_QUOTES)); S.quoteT = rand(8, 12); }
+      if (S.quoteT <= 0) { say(pick(S.chase ? AI_PANIC : AI_QUOTES)); S.quoteT = S.chase ? rand(3, 5) : rand(8, 12); }
     } else if (S.mode === 'title') {
       S.threat = 0.62;
       S.quoteT -= dt;
@@ -346,10 +420,40 @@
     S.popups = S.popups.filter((p) => p.t < 1.3);
     S.shake = Math.max(0, S.shake - dt * 1.5);
     S.flash = Math.max(0, S.flash - dt * 1.5);
+    S.flashGold = Math.max(0, S.flashGold - dt * 1.2);
+    S.shieldBreak = Math.max(0, S.shieldBreak - dt);
+    if (S.banner && (S.banner.t += dt) > 2.6) S.banner = null;
     S.turnT = Math.max(0, S.turnT - dt);
+    yaw = S.turnDir * TURN_YAW * smooth(S.turnT / TURN_TIME);
+    S.cam += ((S.chase ? 1 : 0) - S.cam) * Math.min(1, dt * 2.2);
+    camH = lerp(CAM_H, 4.6, S.cam); camD = lerp(CAM_D, 8.5, S.cam); Z_NEAR = -camD + 0.7;
 
     const px = proj(P.x, 0, 0).x;
     S.ex += (lerp(W / 2, px, 0.6) - S.ex) * Math.min(1, dt * 3);
+  }
+
+  function updateChase(dt) {
+    const C = S.chase;
+    if (C.intro < 1) {
+      // the AI leaps over the student and lands ahead, fleeing
+      C.intro = Math.min(1, C.intro + dt / 0.9);
+      const u = smooth(C.intro);
+      C.z = lerp(-3.5, 4.8, u); C.y = lerp(0.6, 2.1, u) + Math.sin(Math.PI * u) * 3;
+    } else {
+      C.t -= dt;
+      C.z = lerp(C.z, 4.8 + Math.sin(S.t * 1.7) * 0.8 + (C.flinch > 0 ? 1.2 : 0), Math.min(1, dt * 4));
+      C.y = 2.1 + Math.sin(S.t * 6) * 0.12;
+      C.nextDodge -= dt;
+      if (C.nextDodge <= 0) {
+        let nl; do nl = randInt(3); while (nl === C.lane);
+        C.lane = nl; C.nextDodge = rand(0.6, 1.3) * (1 - Math.min(0.4, C.hits * 0.04));
+      }
+      if (C.t <= 0) { endChase(); return; }
+    }
+    C.x += (LANES[C.lane] - C.x) * Math.min(1, dt * 6);
+    C.whipT = Math.max(0, C.whipT - dt);
+    C.cool = Math.max(0, (C.cool || 0) - dt);
+    C.flinch = Math.max(0, C.flinch - dt);
   }
 
   // ---------- Drawing helpers ----------
@@ -362,9 +466,21 @@
     ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
   }
   function quad(x1, z1, x2, z2, color, y = 0) {
-    const a = proj(x1, y, z1), b = proj(x2, y, z1), c = proj(x2, y, z2), d = proj(x1, y, z2);
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.closePath(); ctx.fill();
+    // rotate into camera space, clip against the near plane (Sutherland–Hodgman), then project
+    const c = Math.cos(yaw), sn = Math.sin(yaw), near = 0.35;
+    const cam = [[x1, z1], [x2, z1], [x2, z2], [x1, z2]].map(([x, z]) => {
+      const xr = x - camX; return [xr * c + z * sn, -xr * sn + z * c + camD];
+    });
+    const out = [];
+    for (let i = 0; i < 4; i++) {
+      const a = cam[i], b = cam[(i + 1) % 4], ain = a[1] >= near, bin = b[1] >= near;
+      if (ain) out.push(a);
+      if (ain !== bin) { const t = (near - a[1]) / (b[1] - a[1]); out.push([a[0] + (b[0] - a[0]) * t, near]); }
+    }
+    if (out.length < 3) return;
+    ctx.fillStyle = color; ctx.beginPath();
+    out.forEach(([xr, d], i) => { const k = F / d, X = W / 2 + xr * k, Y = HORIZON + (camH - y) * k; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
+    ctx.closePath(); ctx.fill();
   }
   function poly(pts, color) {
     ctx.fillStyle = color; ctx.beginPath();
@@ -396,8 +512,7 @@
     const g = ctx.createLinearGradient(0, 0, 0, HORIZON);
     g.addColorStop(0, '#1b2550'); g.addColorStop(0.55, '#6d4f8f'); g.addColorStop(1, '#f2a971');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, HORIZON + 4);
-    const k = (S.turnT / TURN_TIME) ** 2;
-    const shift = skyBase + S.turnDir * W * 0.35 * k;
+    const shift = skyBase + yaw * F * 0.9;
     // sun
     const sx = (((W * 0.72 + shift * 0.1) % (W * 1.6)) + W * 1.6) % (W * 1.6) - W * 0.3;
     const sg = ctx.createRadialGradient(sx, HORIZON - 50 * SC, 5, sx, HORIZON - 50 * SC, 160 * SC);
@@ -582,19 +697,51 @@
       ctx.fillStyle = '#333'; rr(-r * 0.62, -r * 0.8, r * 1.24, r * 0.24, r * 0.08); ctx.fill();
       ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = r * 0.08;
       for (const sx of [-0.2, 0.2]) { ctx.beginPath(); ctx.moveTo(sx * r, -r * 0.95); ctx.quadraticCurveTo(sx * r + r * 0.2 * Math.sin(S.t * 5), -r * 1.2, sx * r, -r * 1.45); ctx.stroke(); }
-    } else if (e.kind === 'letter') {
-      ctx.shadowColor = '#9fd8ff'; ctx.shadowBlur = r * 0.9;
-      const w = r * 1.7, h = r * 1.15;
-      ctx.fillStyle = '#fff4dc'; ctx.fillRect(-w / 2, -h / 2, w, h); ctx.shadowBlur = 0;
-      ctx.strokeStyle = '#c9b48f'; ctx.lineWidth = r * 0.07;
-      ctx.beginPath(); ctx.moveTo(-w / 2, -h / 2); ctx.lineTo(0, h * 0.1); ctx.lineTo(w / 2, -h / 2); ctx.stroke();
-      ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(0, h * 0.1, r * 0.25, 0, Math.PI * 2); ctx.fill();
+    } else if (e.kind === 'shield') {
+      ctx.scale(Math.max(0.3, Math.abs(Math.cos(S.t * 2.5 + e.z * 0.2))), 1);
+      ctx.shadowColor = '#5ad1ff'; ctx.shadowBlur = r;
+      ctx.beginPath();
+      ctx.moveTo(0, -r); ctx.quadraticCurveTo(r * 0.5, -r * 0.72, r * 0.92, -r * 0.82);
+      ctx.quadraticCurveTo(r * 0.98, r * 0.45, 0, r * 1.08);
+      ctx.quadraticCurveTo(-r * 0.98, r * 0.45, -r * 0.92, -r * 0.82);
+      ctx.quadraticCurveTo(-r * 0.5, -r * 0.72, 0, -r); ctx.closePath();
+      const sg = ctx.createLinearGradient(0, -r, 0, r); sg.addColorStop(0, '#6fd6ff'); sg.addColorStop(1, '#1565c0');
+      ctx.fillStyle = sg; ctx.fill(); ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = r * 0.12; ctx.stroke();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(-r * 0.38, 0); ctx.lineTo(-r * 0.08, r * 0.32); ctx.lineTo(r * 0.42, -r * 0.3); ctx.stroke();
+    } else if (e.kind === 'skill') {
+      // glowing hexagonal "AI skill" chip
+      ctx.rotate(Math.sin(S.t * 2 + e.z) * 0.2);
+      ctx.shadowColor = '#7df9ff'; ctx.shadowBlur = r * 0.9;
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) { const a = Math.PI / 6 + k * Math.PI / 3; k ? ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+      ctx.closePath();
+      const hg = ctx.createLinearGradient(-r, -r, r, r); hg.addColorStop(0, '#7c4dff'); hg.addColorStop(1, '#00c6ff');
+      ctx.fillStyle = hg; ctx.fill(); ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = r * 0.09; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = `900 ${r * 0.75}px system-ui, sans-serif`; ctx.fillText('AI', 0, r * 0.04);
+      ctx.restore(); ctx.save();
+      if (r > 13) {
+        ctx.fillStyle = '#c9fbff'; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 3;
+        ctx.font = `800 ${Math.min(15, r * 0.48)}px system-ui, sans-serif`; ctx.textAlign = 'center';
+        ctx.strokeText(e.skill, p.x, p.y + r * 1.55); ctx.fillText(e.skill, p.x, p.y + r * 1.55);
+      }
     }
     ctx.restore();
     ctx.globalAlpha = 1;
   }
 
   // ---------- Obstacles ----------
+  function drawObsMaybeFlying(e) {
+    if (!e.deflect) return drawObs(e);
+    const p = proj(e.x, 1, e.z), ft = e.flyT || 0;
+    ctx.save();
+    ctx.translate(p.x, p.y - ft * 900 * SC); ctx.rotate(ft * 7 * (e.x >= P.x ? 1 : -1)); ctx.translate(-p.x, -p.y);
+    drawObs(e);
+    ctx.restore();
+  }
   function drawObs(e) {
     const p = proj(e.x, 0, e.z), s = p.s;
     if (s < 1) return;
@@ -746,7 +893,7 @@
     const ph = S.dist * 1.15, sw = running ? Math.sin(ph) : 0;
     const air = P.y > 0.05;
     ctx.save(); ctx.globalAlpha = alpha;
-    ctx.translate(p.x, p.y); ctx.scale(s, s);
+    ctx.translate(p.x, p.y); ctx.scale(s, s); ctx.rotate(yaw * 0.3);
     if (falling) ctx.scale(alpha, alpha);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     const bob = running && !air ? Math.abs(sw) * 0.06 : 0;
@@ -790,10 +937,25 @@
     const tx = 0.22 + Math.sin(S.t * 9) * 0.04;
     ctx.strokeStyle = '#ffcf3f'; ctx.lineWidth = 0.035;
     ctx.beginPath(); ctx.moveTo(0, -2.05); ctx.lineTo(tx, -2.02); ctx.lineTo(tx + 0.02, -1.86); ctx.stroke();
-    // shield aura
+    // coiled whip in hand during the chase
+    if (S.chase && !(S.chase.whipT > 0)) {
+      ctx.strokeStyle = '#6b4423'; ctx.lineWidth = 0.05;
+      ctx.beginPath(); ctx.ellipse(0.46, -0.85, 0.12, 0.16, 0.3, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0.38, -0.95); ctx.lineTo(0.42, -0.62); ctx.stroke();
+    }
+    // shield bubble
     if (S.shield) {
-      ctx.strokeStyle = `rgba(159,216,255,${0.5 + 0.3 * Math.sin(S.t * 6)})`; ctx.lineWidth = 0.06;
-      ctx.beginPath(); ctx.ellipse(0, -1.05, 0.65, 1.2, 0, 0, Math.PI * 2); ctx.stroke();
+      const sg = ctx.createRadialGradient(0, -1.0, 0.2, 0, -1.0, 1.3);
+      sg.addColorStop(0, 'rgba(90,209,255,0)'); sg.addColorStop(0.75, 'rgba(90,209,255,0.12)'); sg.addColorStop(1, 'rgba(90,209,255,0.45)');
+      ctx.fillStyle = sg; ctx.beginPath(); ctx.ellipse(0, -1.0, 0.85, 1.3, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = `rgba(160,230,255,${0.6 + 0.3 * Math.sin(S.t * 6)})`; ctx.lineWidth = 0.05; ctx.stroke();
+      ctx.fillStyle = '#e6faff';
+      for (let i = 0; i < 3; i++) { const a = S.t * 3 + i * 2.09; ctx.beginPath(); ctx.arc(Math.cos(a) * 0.85, -1.0 + Math.sin(a) * 1.3, 0.05, 0, Math.PI * 2); ctx.fill(); }
+    }
+    if (S.shieldBreak > 0) {
+      const k = 1 + (0.5 - S.shieldBreak) * 3;
+      ctx.strokeStyle = `rgba(160,230,255,${S.shieldBreak * 2})`; ctx.lineWidth = 0.08;
+      ctx.beginPath(); ctx.ellipse(0, -1.0, 0.85 * k, 1.3 * k, 0, 0, Math.PI * 2); ctx.stroke();
     }
     ctx.restore();
   }
@@ -815,53 +977,104 @@
     ctx.restore();
   }
 
-  function drawAI() {
-    const caught = S.cause === 'caught' && S.mode !== 'play';
-    let vis = caught ? 1 + Math.min(S.dyingT, 1.6) * 1.4 : S.threat;
-    const base = Math.min(W, H) * 0.17;
-    const R = base * (1 + Math.max(0, vis - 1) * 1.1);
-    const cx = S.ex, t = S.t;
-    const cy = H + base * 0.9 - Math.min(vis, 1) * base * 1.3 - Math.max(0, vis - 1) * H * 0.22 + Math.sin(t * 3) * base * 0.04;
-    if (cy - R * 1.7 > H) return;
-    // glow
+  function drawAIBody(cx, cy, R, spin, opts = {}) {
+    const t = S.t, hurt = opts.flinch > 0;
+    if (hurt) { cx += (Math.random() - 0.5) * R * 0.15; cy += (Math.random() - 0.5) * R * 0.15; }
+    const gc = hurt ? '255,80,80' : '16,163,127';
     const g = ctx.createRadialGradient(cx, cy, R * 0.5, cx, cy, R * 1.7);
-    g.addColorStop(0, 'rgba(16,163,127,0.55)'); g.addColorStop(1, 'rgba(16,163,127,0)');
+    g.addColorStop(0, `rgba(${gc},0.55)`); g.addColorStop(1, `rgba(${gc},0)`);
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R * 1.7, 0, Math.PI * 2); ctx.fill();
-    // data tendrils
+    // data tendrils (flailing when panicking)
     ctx.lineCap = 'round';
-    for (let i = 0; i < 11; i++) {
-      const a = Math.PI * (-0.12 + (i / 10) * 1.24);
-      const len = R * (0.7 + 0.25 * Math.sin(t * 2 + i * 1.7));
+    const n = opts.panic ? 14 : 11, sp = opts.panic ? 3 : 1;
+    for (let i = 0; i < n; i++) {
+      const a = opts.panic ? (i / n) * Math.PI * 2 : Math.PI * (-0.12 + (i / 10) * 1.24);
+      const len = R * (0.7 + 0.25 * Math.sin(t * 2 * sp + i * 1.7));
       const x0 = cx + Math.cos(a) * R * 0.8, y0 = cy + Math.sin(a) * R * 0.8;
       const x1 = cx + Math.cos(a) * (R + len), y1 = cy + Math.sin(a) * (R + len);
-      const wob = Math.sin(t * 5 + i) * R * 0.25;
-      ctx.strokeStyle = 'rgba(16,163,127,0.85)'; ctx.lineWidth = R * 0.06;
+      const wob = Math.sin(t * 5 * sp + i) * R * 0.25;
+      ctx.strokeStyle = `rgba(${gc},0.85)`; ctx.lineWidth = R * 0.06;
       ctx.beginPath(); ctx.moveTo(x0, y0);
       ctx.quadraticCurveTo((x0 + x1) / 2 - Math.sin(a) * wob, (y0 + y1) / 2 + Math.cos(a) * wob, x1, y1); ctx.stroke();
-      ctx.fillStyle = '#7dffcf'; ctx.beginPath(); ctx.arc(x1, y1, R * 0.04, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = hurt ? '#ffb3b3' : '#7dffcf'; ctx.beginPath(); ctx.arc(x1, y1, R * 0.04, 0, Math.PI * 2); ctx.fill();
     }
-    // body
     const b = ctx.createRadialGradient(cx - R * 0.35, cy - R * 0.35, R * 0.1, cx, cy, R);
     b.addColorStop(0, '#3a3a3a'); b.addColorStop(1, '#030303');
     ctx.fillStyle = b; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#10a37f'; ctx.lineWidth = R * 0.035; ctx.stroke();
-    // the knot "face"
+    ctx.strokeStyle = hurt ? '#ff5050' : '#10a37f'; ctx.lineWidth = R * 0.035; ctx.stroke();
     ctx.save(); ctx.translate(cx, cy);
-    drawKnot(R * 0.6, t * (0.4 + vis * 0.6), '#151515');
+    drawKnot(R * 0.6, spin, '#151515');
     const pulse = 0.5 + 0.5 * Math.sin(t * 6);
     const eg = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 0.22);
-    eg.addColorStop(0, `rgba(125,255,207,${0.6 + pulse * 0.4})`); eg.addColorStop(1, 'rgba(16,163,127,0)');
+    eg.addColorStop(0, hurt ? 'rgba(255,90,90,1)' : `rgba(125,255,207,${0.6 + pulse * 0.4})`); eg.addColorStop(1, `rgba(${gc},0)`);
     ctx.fillStyle = eg; ctx.beginPath(); ctx.arc(0, 0, R * 0.22, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
-    // name tag
-    if (vis > 0.35 && !caught) {
+    if (opts.panic) {
+      // sweat drops
+      ctx.fillStyle = '#9fe6ff';
+      for (const side of [-1, 1]) {
+        const ph = (t * 1.6 + (side > 0 ? 0.5 : 0)) % 1;
+        const dx = cx + side * R * (0.85 + ph * 0.3), dy = cy - R * 0.7 + ph * R * 0.8, dr = R * 0.09;
+        ctx.globalAlpha = 1 - ph;
+        ctx.beginPath(); ctx.moveTo(dx, dy - dr * 2); ctx.quadraticCurveTo(dx + dr, dy, dx, dy + dr); ctx.quadraticCurveTo(dx - dr, dy, dx, dy - dr * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (opts.tag) {
       ctx.font = `800 ${Math.max(11, R * 0.13)}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const tag = 'ChatGPT-∞', tw = ctx.measureText(tag).width + R * 0.16, th = R * 0.2;
+      const tag = 'ChatGPT-∞', tw = ctx.measureText(tag).width + R * 0.16, th = Math.max(16, R * 0.2);
       ctx.fillStyle = '#10a37f'; rr(cx - tw / 2, cy - R - th * 0.6, tw, th, th / 2); ctx.fill();
       ctx.fillStyle = '#fff'; ctx.fillText(tag, cx, cy - R - th * 0.1);
     }
-    // speech bubble
+  }
+
+  // The AI chasing from behind the student (normal mode, and the "caught" ending).
+  function drawAI() {
+    if (S.chase) return;
+    const caught = S.cause === 'caught' && S.mode !== 'play';
+    const vis = caught ? 1 + Math.min(S.dyingT, 1.6) * 1.4 : S.threat;
+    const base = Math.min(W, H) * 0.17;
+    const R = base * (1 + Math.max(0, vis - 1) * 1.1);
+    const cx = S.ex;
+    const cy = H + base * 0.9 - Math.min(vis, 1) * base * 1.3 - Math.max(0, vis - 1) * H * 0.22 + Math.sin(S.t * 3) * base * 0.04;
+    if (cy - R * 1.7 > H) return;
+    drawAIBody(cx, cy, R, S.t * (0.4 + vis * 0.6), { tag: vis > 0.35 && !caught });
     if (S.quoteShow > 0 && S.mode !== 'over') drawBubble(cx, Math.min(cy - R * 1.05, H - 40), R);
+  }
+
+  // The AI fleeing ahead of the student (chase mode).
+  function chaseAIScreen() {
+    const C = S.chase, p = proj(C.x, C.y, C.z);
+    return { x: p.x, y: p.y, R: 1.1 * p.s, p };
+  }
+  function drawChaseAI() {
+    const C = S.chase, a = chaseAIScreen();
+    const g = proj(C.x, 0, C.z);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath(); ctx.ellipse(g.x, g.y, a.R * 0.8, a.R * 0.2, 0, 0, Math.PI * 2); ctx.fill();
+    drawAIBody(a.x, a.y, a.R, S.t * 4, { panic: true, flinch: C.flinch, tag: true });
+  }
+
+  // Whip lash from the student's hand to the AI's depth in the student's lane.
+  function drawWhip() {
+    const C = S.chase;
+    if (!C || C.whipT <= 0) return;
+    const u = 1 - C.whipT / 0.3, ext = Math.min(1, u * 2.5);
+    const hand = proj(P.x + 0.4, P.y + 0.95, 0);
+    const tgt = C.hit ? chaseAIScreen() : proj(P.x, 1.7, C.z);
+    const ex = lerp(hand.x, tgt.x, ext), ey = lerp(hand.y, tgt.y, ext);
+    const cxp = (hand.x + ex) / 2 + Math.sin(u * 20) * 30 * SC, cyp = Math.min(hand.y, ey) - 120 * SC * (1 - u);
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#3d2614'; ctx.lineWidth = 7 * SC + 2;
+    ctx.beginPath(); ctx.moveTo(hand.x, hand.y); ctx.quadraticCurveTo(cxp, cyp, ex, ey); ctx.stroke();
+    ctx.strokeStyle = '#8b5a2b'; ctx.lineWidth = 3.5 * SC + 1; ctx.stroke();
+    if (ext >= 1 && C.hit) {
+      ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 4 * SC + 1;
+      for (let i = 0; i < 10; i++) {
+        const a = i * Math.PI / 5 + u, r1 = 20 * SC, r2 = (50 + 40 * u) * SC;
+        ctx.beginPath(); ctx.moveTo(ex + Math.cos(a) * r1, ey + Math.sin(a) * r1); ctx.lineTo(ex + Math.cos(a) * r2, ey + Math.sin(a) * r2); ctx.stroke();
+      }
+    }
   }
 
   function drawBubble(ax, ay, R) {
@@ -877,7 +1090,7 @@
     for (const w of full) { const tst = c2 ? c2 + ' ' + w : w; if (ctx.measureText(tst).width > maxW && c2) { fullLines++; c2 = w; } else c2 = tst; }
     const bw = Math.min(maxW, ctx.measureText(S.quote).width) + fs * 3.2, bh = fullLines * fs * 1.3 + fs * 1.1;
     let bx = clamp(ax + R * 0.3, 12, W - bw - 12), by = ay - bh - 14;
-    by = clamp(by, 70, H - bh - 10);
+    by = clamp(by, 115, H - bh - 10);
     ctx.globalAlpha = Math.min(1, S.quoteShow * 3);
     ctx.fillStyle = '#fff'; ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 12;
     rr(bx, by, bw, bh, 12); ctx.fill(); ctx.shadowBlur = 0;
@@ -892,14 +1105,11 @@
   // ---------- Frame ----------
   function draw() {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    HORIZON = H - (camH * F) / camD - H * 0.13;
     ctx.save();
     if (S.shake > 0) ctx.translate((Math.random() - 0.5) * S.shake * 30, (Math.random() - 0.5) * S.shake * 30);
     drawSky();
     ctx.save();
-    if (S.turnT > 0) {
-      const k = (S.turnT / TURN_TIME) ** 2;
-      ctx.translate(W / 2, H * 0.9); ctx.rotate(S.turnDir * 0.55 * k); ctx.translate(-W / 2 + S.turnDir * W * 0.2 * k, -H * 0.9);
-    }
     drawGround();
 
     const c = S.corner;
@@ -910,18 +1120,42 @@
     }
     for (const e of S.ents) if (e.cat !== 'gap' && e.z < DRAW) sprites.push(e);
     if (c && c.z + JUNC < DRAW) sprites.push({ cat: 'hedge', z: c.z + JUNC + 0.01 });
-    sprites.push({ cat: 'player', z: 0 });
-    sprites.sort((a, b) => b.z - a.z);
+    sprites.push({ cat: 'player', z: 0, x: P.x });
+    if (S.chase) sprites.push({ cat: 'chaseAI', z: S.chase.z, x: S.chase.x });
+    for (const e of sprites) e.depth = proj(e.x || 0, 0, e.z).d;
+    sprites.sort((a, b) => b.depth - a.depth);
     for (const e of sprites) {
+      if (e.depth < 0.8 && e.cat !== 'player') continue; // behind the camera while it swings
+
       if (e.cat === 'player') drawPlayer();
       else if (e.cat === 'item') drawItem(e);
-      else if (e.cat === 'obs') drawObs(e);
+      else if (e.cat === 'obs') drawObsMaybeFlying(e);
+      else if (e.cat === 'chaseAI') drawChaseAI();
       else if (e.cat === 'hedge') drawHedge(c);
       else drawScenery(e);
     }
+    drawWhip();
+    if (S.chase && S.quoteShow > 0) { const a = chaseAIScreen(); if (a.p.d > 1) drawBubble(a.x, a.y - a.R * 1.1, a.R); }
     ctx.restore();
 
     drawAI();
+    if (S.cam > 0.01) {
+      const gv = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
+      gv.addColorStop(0, 'rgba(255,200,60,0)'); gv.addColorStop(1, `rgba(255,190,40,${0.35 * S.cam})`);
+      ctx.fillStyle = gv; ctx.fillRect(0, 0, W, H);
+    }
+    if (S.flashGold > 0) { ctx.fillStyle = `rgba(255,236,170,${S.flashGold})`; ctx.fillRect(0, 0, W, H); }
+    if (S.banner) {
+      const b = S.banner, a = clamp(Math.min(b.t * 4, (2.6 - b.t) * 2), 0, 1), pop = 1 + Math.max(0, 0.25 - b.t) * 1.5;
+      ctx.save(); ctx.globalAlpha = a; ctx.translate(W / 2, Math.max(175, H * 0.24)); ctx.scale(pop, pop);
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      fitText(b.title, W * 0.9, clamp(W * 0.085, 30, 72));
+      ctx.lineWidth = 8; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.strokeText(b.title, 0, 0);
+      ctx.fillStyle = '#ffcf3f'; ctx.fillText(b.title, 0, 0);
+      const ss = fitText(b.sub, W * 0.9, clamp(W * 0.025, 14, 22), 700);
+      ctx.lineWidth = 4; ctx.strokeText(b.sub, 0, ss * 2.6); ctx.fillStyle = '#fff'; ctx.fillText(b.sub, 0, ss * 2.6);
+      ctx.restore();
+    }
 
     // chase vignette
     const danger = S.mode === 'play' && S.stumble > 0 ? clamp((S.threat - 0.5) / 0.5, 0, 1) : 0;
@@ -954,13 +1188,18 @@
   }
 
   // ---------- HUD & screens ----------
-  const hud = { score: $('score'), apps: $('apps'), tests: $('tests'), powers: $('powers') };
+  const hud = { score: $('score'), apps: $('apps'), tests: $('tests'), powers: $('powers'), bar: $('skillbar'), fill: $('skillFill'), lbl: $('skillLbl') };
   let lastHud = '';
   function updateHud() {
-    const pw = (S.magnet > 0 ? `☕ Magnet ${Math.ceil(S.magnet)}s|` : '') + (S.shield ? '✉️ Shield|' : '');
-    const key = `${S.score | 0}/${S.apps}/${S.tests}/${pw}`;
+    const pw = (S.magnet > 0 ? `☕ Magnet ${Math.ceil(S.magnet)}s|` : '') + (S.shield ? '🛡️ Shield|' : '');
+    const C = S.chase;
+    const frac = C ? (C.intro < 1 ? 1 : clamp(C.t / CHASE_TIME, 0, 1)) : S.skills / SKILLS_NEEDED;
+    const key = `${S.score | 0}/${S.apps}/${S.tests}/${pw}/${frac.toFixed(3)}`;
     if (key === lastHud) return;
     lastHud = key;
+    hud.fill.style.width = (frac * 100).toFixed(1) + '%';
+    hud.bar.classList.toggle('chase', !!C);
+    hud.lbl.textContent = C ? `🔥 WHIP THE AI! ${Math.max(0, C.t).toFixed(1)}s` : `🧠 AI skills ${S.skills}/${SKILLS_NEEDED}`;
     hud.score.textContent = S.score | 0; hud.apps.textContent = S.apps; hud.tests.textContent = S.tests;
     hud.powers.innerHTML = pw.split('|').filter(Boolean).map((x) => `<div>${x}</div>`).join('');
   }
@@ -973,7 +1212,7 @@
     paused = false;
     say("Hi! I'm here to help... with your job.");
     S.quoteT = 6;
-    show('title', false); show('over', false); show('paused', false); show('hud', true);
+    show('title', false); show('over', false); show('paused', false); show('hud', true); show('skillbar', true);
   }
 
   function gameOver() {
@@ -993,8 +1232,9 @@
     $('rCompanies').innerHTML = comp.length
       ? comp.map(([n, c]) => `<span class="chip">${n} ×${c}</span>`).join('')
       : '<span class="chip">No applications sent… the AI applied for you.</span>';
+    $('rWhips').textContent = S.whips ? `🪢 You whipped the AI ${S.whips} time${S.whips > 1 ? 's' : ''}!` : 'Fill the AI-skills bar to turn the tables next time.';
     $('rBest').textContent = isBest ? '🏆 New personal best!' : `Best: ${best}`;
-    show('hud', false); show('over', true);
+    show('hud', false); show('skillbar', false); show('over', true);
   }
 
   function togglePause(force) {
@@ -1031,7 +1271,8 @@
     if (Math.abs(dx) > Math.abs(dy)) act(dx > 0 ? 1 : -1);
     else if (dy < 0) jump(); else slide();
   }, { passive: false });
-  canvas.addEventListener('touchend', () => { touch = null; });
+  canvas.addEventListener('touchend', () => { if (touch && !touch.done && S.chase) whip(); touch = null; });
+  canvas.addEventListener('mousedown', () => { if (S.chase && !paused) whip(); });
 
   $('startBtn').addEventListener('click', start);
   $('againBtn').addEventListener('click', start);
@@ -1054,5 +1295,5 @@
   requestAnimationFrame(frame);
 
   // Test hook (used for automated checks only; harmless in production)
-  window.__grad = { get S() { return S; }, get P() { return P; }, start, act, jump, slide };
+  window.__grad = { get S() { return S; }, get P() { return P; }, start, act, jump, slide, startChase };
 })();
