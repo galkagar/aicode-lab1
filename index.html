@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Grad Run: Outrun the AI</title>
+  <meta name="description" content="A Temple Run style browser game: a student runs from an AI that wants their job, collecting company logos and A+ tests.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="game" aria-label="Grad Run game canvas"></canvas>
+
+  <div id="hud" class="hidden">
+    <div class="stat"><span class="lbl">Score</span><span id="score">0</span></div>
+    <div class="stat gold"><span class="lbl">Applications</span><span id="apps">0</span></div>
+    <div class="stat"><span class="lbl">A+ tests</span><span id="tests">0</span></div>
+    <div id="powers"></div>
+    <div class="btns">
+      <button id="pauseBtn" title="Pause (P)" aria-label="Pause">❚❚</button>
+      <button id="muteBtn" title="Sound on/off" aria-label="Toggle sound">🔊</button>
+    </div>
+  </div>
+
+  <div id="title" class="overlay">
+    <div class="card">
+      <p class="kicker">HUJI · Semester of Doom</p>
+      <h1>GRAD <span>RUN</span></h1>
+      <p class="tag">An AI wants your future job. Run.</p>
+      <div class="howto">
+        <div><kbd>←</kbd><kbd>→</kbd> switch lane · turn at corners</div>
+        <div><kbd>↑</kbd> / <kbd>Space</kbd> jump over <b class="y">DEADLINES</b> and pits</div>
+        <div><kbd>↓</kbd> slide under <b class="r">PLAGIARISM SCANS</b></div>
+        <div class="touch">On phone: swipe ← → ↑ ↓</div>
+      </div>
+      <div class="collect">
+        <span>Collect:</span>
+        <span class="chip">🏢 company logos = applications</span>
+        <span class="chip">💯 A+ tests</span>
+        <span class="chip">☕ magnet</span>
+        <span class="chip">✉️ rec-letter shield</span>
+      </div>
+      <p class="warn">Trip twice in a row and the AI catches you.</p>
+      <button id="startBtn" class="big">Start running</button>
+      <p class="best" id="bestTitle"></p>
+    </div>
+  </div>
+
+  <div id="over" class="overlay hidden">
+    <div class="card">
+      <p class="kicker" id="overKicker">GAME OVER</p>
+      <h2 id="overTitle">The AI took your internship.</h2>
+      <p class="quote" id="overSub"></p>
+      <div class="results">
+        <div><span id="rScore">0</span><small>score</small></div>
+        <div><span id="rApps">0</span><small>applications</small></div>
+        <div><span id="rTests">0</span><small>A+ tests</small></div>
+        <div><span id="rDist">0</span><small>meters</small></div>
+      </div>
+      <div id="rCompanies" class="companies"></div>
+      <p class="best" id="rBest"></p>
+      <button id="againBtn" class="big">Run again</button>
+      <p class="hint">or press Space</p>
+    </div>
+  </div>
+
+  <div id="paused" class="overlay hidden">
+    <div class="card small">
+      <h2>Paused</h2>
+      <p class="tag">The AI is waiting. It's very patient.</p>
+      <button id="resumeBtn" class="big">Resume</button>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
